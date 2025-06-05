@@ -21,6 +21,7 @@ n_neurons = 100
 fs = 100
 n_samples = int(fs * t_total_sim)
 A = 200 * pA
+# B = 400 * pA
 B = 25 * pA
 R = 80 * Mohm
 f = 10*Hz  
@@ -46,10 +47,14 @@ G = NeuronGroup(n_neurons,
                 method='euler')
 G.v = v_rest
 # Задаем различные амплитуды для двух подгрупп нейронов
-G.amplitude[:n_neurons//2] = A  # нейроны с 0 по 24 получают амплитуду A
-G.amplitude[n_neurons//2:] = B  # нейроны с 25 по 50 получают амплитуду B
-G.amplitude2[:n_neurons//2] = B  # нейроны с 25 по 50 получают амплитуду B
-G.amplitude2[n_neurons//2:] = A  # нейроны с 0 по 24 получают амплитуду A
+# G.amplitude[:n_neurons//2] = B  # нейроны с 0 по 24 получают амплитуду A
+# G.amplitude2[n_neurons//2:] = A  # нейроны с 0 по 24 получают амплитуду A
+
+G.amplitude[:n_neurons//2] = B  # нейроны с 0 по 24 получают амплитуду A
+G.amplitude[n_neurons//2:] = A  # нейроны с 25 по 50 получают амплитуду B
+G.amplitude2[:n_neurons//2] = A  # нейроны с 25 по 50 получают амплитуду B
+G.amplitude2[n_neurons//2:] = B  # нейроны с 0 по 24 получают амплитуду A
+
 
 p_intra1 = 0.15
 p_intra2 = 0.15
@@ -59,8 +64,8 @@ p_21     = 0.05
 # Веса соединения
 w_intra1 = 6.6
 w_intra2 = 6.6
-w_12     = 10
-w_21     = 1
+w_12     = 1
+w_21     = 10
 
 n_half = n_neurons // 2
 
@@ -128,18 +133,22 @@ t_sim = mon.t/second
 x1 = mon.v[:n_neurons//2, :] / mV  # (форма: n_neurons//2, 1000)
 x2 = mon.v[n_neurons//2:, :] / mV  # (форма: n_neurons//2, 1000)
 
-
-v1 = mon.v[:n_neurons//2 , :].mean(axis=0) / mV             # кластер 1
-v2 = mon.v[n_neurons//2:, :].mean(axis=0) / mV              # кластер 2
-v3 = mon.v[:, :].mean(axis=0) / mV              # кластер 2
-
-
 trial0 = x1.T  # (1000, n_neurons//2)
 trial1 = x2.T  # (1000, n_neurons//2)
 signal = np.stack((trial0, trial1), axis=-1)  # (1000, n_neurons//2, 2)
 
+print(signal.shape)
+
+v1 = mon.v[:n_neurons//2 , :].mean(axis=0) / mV             # кластер 1
+v2 = mon.v[n_neurons//2:, :].mean(axis=0) / mV              # кластер 2
+
+
+trial0 = x1.T  # (1000, n_neurons//2)
+trial1 = x2.T  # (1000, n_neurons//2)
+signal_noisy = np.stack((trial0, trial1), axis=-1)  # (1000, n_neurons//2, 2)
+
 # Добавление фонового шума
-signal_noisy = signal + np.random.normal(0, 1, signal.shape)
+# signal_noisy = signal + np.random.normal(0, 1, signal.shape)
 
 fig, axes = plt.subplots(2, 1, figsize=(10, 8))
 
@@ -159,8 +168,8 @@ v_noisy = v + np.random.normal(0, 1, v.shape)
 print(v_noisy.shape)
 
 
-win_len, step, order = 256, 64, 4
-nfft      = 256
+win_len, step, order = 128, 64, 4
+nfft      = 128
 freqs     = np.linspace(0, fs/2, nfft//2 + 1) # 0-50
 n_freq    = len(freqs) # 129
 
@@ -168,37 +177,62 @@ def spectra_2x2(A, Sigma, i, j):
     gc  = np.empty(n_freq)
     dtf = np.empty(n_freq)
     pdc = np.empty(n_freq)
-
     for l, f in enumerate(freqs): # l=129 f=0-50
+        # print(l)
         z  = np.exp(-1j * 2*np.pi * f / fs)
         Az = np.eye(2, dtype=complex) # [[1+j, 0+j],[0+j, 1+j]]
         for p, Al in enumerate(A, start=1): # p=4 Al=(2,2)
             Az -= Al * z**p
 
+        # print(Az)
         Hz = np.linalg.inv(Az) # Az=[[a,b][c,d]] A(z)^{-1}=1/(ad-bc)[[d, -b],[-c, a]]
         Sz = Hz @ Sigma @ Hz.conj().T # S(z)=H(z)ΣH^*(z) Hz=[[3+j, 5],[2-j, j]] Hz^*=[[3-j, 2+j],[5, -j]]
         S_cond = Sz[i, i] - Sz[i, j] * (1.0 / Sz[j, j]) * Sz[j,i]  # S_ii|j = S_ii − S_ij*S_jj^{-1}*S_ji
         gc[l]  = np.log(np.real(Sz[i, i] / S_cond)) # ln(S_11(w)/S_(11|2)(w)) np.real - берем действительную часть числа (без j)
         dtf[l] = np.abs(Hz[i, j])**2 / (np.abs(Hz[i, 0])**2 + np.abs(Hz[i, 1])**2)  # |Hz_ij|^2/(|Hz_i0|^2+|Hz_i1|^2)
         pdc[l] = np.abs(Az[i, j])**2 / (np.abs(Az[0, j])**2 + np.abs(Az[1, j])**2)  # |Az_ij|^2/(|Az_0j|^2+|Az_1j|^2)
+        # gc_l  = np.log(np.real(Sz[i, i] / S_cond)) # ln(S_11(w)/S_(11|2)(w)) np.real - берем действительную часть числа (без j)
+        # dtf_l = np.abs(Hz[i, j])**2 / (np.abs(Hz[i, 0])**2 + np.abs(Hz[i, 1])**2)  # |Hz_ij|^2/(|Hz_i0|^2+|Hz_i1|^2)
+        # pdc_l = np.abs(Az[i, j])**2 / (np.abs(Az[0, j])**2 + np.abs(Az[1, j])**2)  # |Az_ij|^2/(|Az_0j|^2+|Az_1j|^2)
+        # if gc_l < 0.5:
+        #     gc[l] = 0
+        # else:
+        #     print("gc",l)
+        #     print(gc_l)
+        #     gc[l] = gc_l
+        # if dtf_l < 0.7:
+        #     dtf[l] = 0
+        # else:
+        #     print("dtf", dtf_l)
+        #     print(dtf_l)
+        #     dtf[l] = dtf_l
+        # if pdc_l < 0.7:
+        #     pdc[l] = 0
+        # else:
+        #     print("pdc", pdc_l)
+        #     print(pdc_l)
+        #     pdc[l] = pdc_l
     return gc, dtf, pdc
 
 def var_ols_const(y, p=4):
     y = np.asarray(y, float)
-    T, k = y.shape # (256, 2)
-    Y = y[p:] # (252, 2)
-    lags = [y[p-l-1:T-l-1] for l in range(p)] # (4, 252, 2) -> смещенные сигналы
-    X = np.hstack([np.ones((T-p, 1)), *lags]) # (252, 9) -> N=T-p=252, 1+k*p=1+2*4=9 -> массив единиц
+    # y = y.reshape(128, 100)
+    T, k = y.shape # (128, 2)
+    Y = y[p:] # (124, 2)
+    lags = [y[p-l-1:T-l-1] for l in range(p)] # (4, 124, 2) -> смещенные сигналы
+    X = np.hstack([np.ones((T-p, 1)), *lags]) # (124, 9) -> N=T-p=124, 1+k*p=1+2*4=9 -> массив единиц
 
     # β = (XᵀX)⁻¹XᵀY
     XtX = X.T @ X # (9, 9)
     XtY = X.T @ Y # (9, 2)
-    B = np.linalg.solve(XtX, XtY) # (9, 2) решаем Ax=b, где XtX-A, XtY-b
+    alpha = 1e-3  # или подобрать на кросс‐валидации
+    B = np.linalg.solve(XtX + alpha * np.eye(XtX.shape[0]), XtY) # (9, 2) решаем Ax=b, где XtX-A, XtY-b и еще добавляем регуляризацию
+    # B = np.linalg.solve(XtX, XtY) # (9, 2) решаем Ax=b, где XtX-A, XtY-b
     B_new = [B[1+i*k : 1+(i+1)*k].T for i in range(p)] # (4, 2, 2)
     A = np.stack(B_new, axis=0) # (4, 2, 2) -> собираем в один тензор
-
-    E = Y - X @ B # (252, 2)
-    dof = (T-p) - (k*p + 1) # 243
+    
+    E = Y - X @ B # (124, 2)
+    dof = (T-p) - (k*p + 1) # 115
     Sigma = (E.T @ E) / dof # (2, 2)
     return A, Sigma # (4, 2, 2) и (2, 2)
 
@@ -215,8 +249,9 @@ def slide_2x2(i, j):
     return np.array(G).T, np.array(D).T, np.array(P).T, np.array(T)
 
 
-gc_12, dtf_12, pdc_12, times = slide_2x2(0, 1)
-gc_21, dtf_21, pdc_21, _    = slide_2x2(1, 0)
+gc_12, dtf_12, pdc_12, times = slide_2x2(1, 0)
+gc_21, dtf_21, pdc_21, _ = slide_2x2(0, 1)
+
 
 n_win  = gc_12.shape[1]                 # число окон
 dt      = step / fs                     # 0.64 c
@@ -243,8 +278,6 @@ for col, (name, (m12, m21)) in enumerate(measures.items()):
 
     # горизонтальные линии на частотах драйверов
     for ax in (axs[0, col], axs[1, col]):
-        for f0 in (10, 30):
-            ax.axhline(f0, ls='--', lw=1.1, color='white')
         ax.set_xlim(time_edges[0], time_edges[-1])
         ax.set_ylim(0, 50)
         ax.set_xlabel('t, c')
@@ -258,4 +291,3 @@ for ax in axs[:, 0]:
     ax.set_ylabel('f, Гц')
 
 plt.show()
-
