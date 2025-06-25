@@ -1,9 +1,6 @@
 from brian2 import *
 import numpy as np
 import matplotlib.pyplot as plt
-from spectral_connectivity import Multitaper, Connectivity
-from matplotlib.colors import LogNorm, Normalize     # ← добавлено
-from scipy.signal import butter, filtfilt
 
 start_scope()
 
@@ -21,8 +18,7 @@ n_neurons = 100
 fs = 100
 n_samples = int(fs * t_total_sim)
 A = 200 * pA
-# B = 400 * pA
-B = 25 * pA
+B = 100 * pA
 R = 80 * Mohm
 f = 10*Hz  
 f2 = 30*Hz     
@@ -46,72 +42,119 @@ G = NeuronGroup(n_neurons,
                 reset="v = v_reset",
                 method='euler')
 G.v = v_rest
-# Задаем различные амплитуды для двух подгрупп нейронов
-# G.amplitude[:n_neurons//2] = B  # нейроны с 0 по 24 получают амплитуду A
-# G.amplitude2[n_neurons//2:] = A  # нейроны с 0 по 24 получают амплитуду A
 
-G.amplitude[:n_neurons//2] = B  # нейроны с 0 по 24 получают амплитуду A
-G.amplitude[n_neurons//2:] = A  # нейроны с 25 по 50 получают амплитуду B
-G.amplitude2[:n_neurons//2] = A  # нейроны с 25 по 50 получают амплитуду B
-G.amplitude2[n_neurons//2:] = B  # нейроны с 0 по 24 получают амплитуду A
+G.amplitude[:n_neurons//2] = A  # нейроны с 0 по 24 получают амплитуду A
+G.amplitude[n_neurons//2:] = B  # нейроны с 0 по 24 получают амплитуду A
+G.amplitude2[:n_neurons//2] = B # нейроны с 0 по 24 получают амплитуду A
+G.amplitude2[n_neurons//2:] = A  # нейроны с 0 по 24 получают амплитуду A
 
 
+# Вероятности связей
 p_intra1 = 0.15
 p_intra2 = 0.15
 p_12     = 0.05
 p_21     = 0.05
 
 # Веса соединения
-w_intra1 = 6.6
-w_intra2 = 6.6
-w_12     = 1
-w_21     = 10
+w_intra1 = 8
+w_intra2 = 8
+w_12     = 8
+w_21     = 8
 
 n_half = n_neurons // 2
 
-input_rate = 10 * Hz
-input_group = PoissonGroup(n_neurons, rates=input_rate)
-syn_input = Synapses(input_group, G, on_pre='v_post += J')
-syn_input.connect(p=0.2)
+fs           = 100.0                # Гц
+dt_sim       = 1.0/fs               # сек
+n_steps      = int(t_total_sim * fs)  # число шагов интегрирования
 
-S_intra1 = Synapses(G, G, model='w : 1', on_pre='v_post += J * w')
-S_intra1.connect(
-    condition='i <= n_half and j <= n_half',
-    p=p_intra1
-)
-S_intra1.w = w_intra1
+# 2) Задаём два массива скоростей: rate1 для нейронов 0–49, rate2 для 50–99
+rate1_array = np.zeros(n_steps)*Hz
+rate2_array = np.zeros(n_steps)*Hz
 
-# 2) Синапсы внутри 2-го кластера
-S_intra2 = Synapses(G, G, model='w : 1', on_pre='v_post += J * w')
-S_intra2.connect(
-    condition='i >= n_half and j >= n_half',
-    p=p_intra2
-)
-S_intra2.w = w_intra2
+#   - в интервале t=[0,5) сек: rate1=10 Гц, rate2=60 Гц
+rate1_array[:int(5*fs)] = 10*Hz
+rate2_array[:int(5*fs)] = 60*Hz
 
-# 3) Синапсы из 1-го кластера во 2-й
-S_12 = Synapses(G, G, model='w : 1', on_pre='v_post += J * w')
-S_12.connect(
-    condition='i < n_half and j >= n_half',
-    p=p_12
-)
-S_12.w = w_12
+#   - в интервале t=[5,10) сек: rate1=60 Гц, rate2=10 Гц
+rate1_array[int(5*fs):] = 60*Hz
+rate2_array[int(5*fs):] = 10*Hz
 
-# 4) Синапсы из 2-го кластера в 1-й
-S_21 = Synapses(G, G, model='w : 1', on_pre='v_post += J * w')
-S_21.connect(
-    condition='i >= n_half and j < n_half',
-    p=p_21
-)
-S_21.w = w_21
+rate1_t = TimedArray(rate1_array, dt=dt_sim*second)
+rate2_t = TimedArray(rate2_array, dt=dt_sim*second)
+
+n_half = n_neurons // 2
+P1 = PoissonGroup(n_half, rates='rate1_t(t)')
+P2 = PoissonGroup(n_half, rates='rate2_t(t)')
+
+# P1 → G[0:50],  P2 → G[50:100]
+syn1 = Synapses(P1, G[:n_half], on_pre='v_post += J')
+syn1.connect(p=0.3)
+syn2 = Synapses(P2, G[n_half:], on_pre='v_post += J')
+syn2.connect(p=0.3)
+
+
+# 5.1 Возбуждающие внутри 1-го кластера
+S_E1 = Synapses(G, G, model='w : 1',  on_pre='v_post += J * w')
+S_E1.connect(condition='i<40 and j<50', p=p_intra1)
+S_E1.w = w_intra1
+# 5.2 Тормозные внутри 1-го кластера
+S_I1 = Synapses(G, G,model='w : 1',  on_pre='v_post -= J * w')
+S_I1.connect(condition='i>=40 and i<50 and j<50', p=p_intra1)
+S_I1.w = w_intra1
+
+# 5.3 Возбуждающие из 1 кластера во 2 кластер
+S_E12 = Synapses(G, G, model='w : 1', on_pre='v_post += J * w')
+S_E12.connect(condition='i<40 and j>=50', p=p_12)
+S_E12.w = w_12
+# 5.4 Тормозные  из 1 кластера во 2 кластер
+S_I12 = Synapses(G, G, model='w : 1',  on_pre='v_post -= J * w')
+S_I12.connect(condition='i>=40 and i<50 and j>=50', p=p_12)
+S_I12.w = w_12
+
+# # 5.5 Возбуждающие из 2 кластера во 1 кластер
+S_E21 = Synapses(G, G,model='w : 1',  on_pre='v_post += J * w')
+S_E21.connect(condition='i>=50 and i<90 and j<50', p=p_21)
+S_E21.w = w_21
+# 5.6 Тормозные  из 2 кластера во 1 кластер
+S_I21 = Synapses(G, G,model='w : 1',  on_pre='v_post -= J * w')
+S_I21.connect(condition='i>=90 and j<50', p=p_21)
+S_I21.w = w_21
+# 5.7 Возбуждающие внутри 2-го кластера
+S_E2 = Synapses(G, G,model='w : 1',  on_pre='v_post += J * w')
+S_E2.connect(condition='i>=50 and i<90 and j>=50', p=p_intra2)
+S_E2.w = w_intra2
+# 5.8 Тормозные внутри 2-го кластера
+S_I2 = Synapses(G, G,model='w : 1',  on_pre='v_post -= J * w')
+S_I2.connect(condition='i>=90 and j>=50', p=p_intra2)
+S_I2.w = w_intra2
 
 
 W = np.zeros((n_neurons, n_neurons))
-W[S_intra1.i[:], S_intra1.j[:]] = S_intra1.w[:]
-W[S_intra2.i[:], S_intra2.j[:]] = S_intra2.w[:]
-W[S_12.i[:], S_12.j[:]] = S_12.w[:]
-W[S_21.i[:], S_21.j[:]] = S_21.w[:]
-plt.matshow(W, cmap='viridis')
+W[S_E1.i[:], S_E1.j[:]] = S_E1.w[:]
+W[S_I1.i[:], S_I1.j[:]] = S_I1.w[:]
+W[S_E12.i[:], S_E12.j[:]] = S_E12.w[:]
+W[S_I12.i[:], S_I12.j[:]] = S_I12.w[:]
+
+W[S_E2.i[:], S_E2.j[:]] = S_E2.w[:]
+W[S_I2.i[:], S_I2.j[:]] = S_I2.w[:]
+W[S_E21.i[:], S_E21.j[:]] = S_E21.w[:]
+W[S_I21.i[:], S_I21.j[:]] = S_I21.w[:]
+
+
+fig, ax = plt.subplots(figsize=(6, 5))
+
+im = ax.matshow(W, cmap='viridis')          # сам образ (AxesImage)
+cbar = fig.colorbar(im, ax=ax,             # ← добавляем colorbar
+                    shrink=0.85,           # (необязательно) делаем короче
+                    pad=0.02)              # (необязательно) отступ от осей
+cbar.set_label('Вес синапсов', fontsize=16)
+
+ax.set_title('Матрица синапсов', fontsize=18)
+ax.set_xlabel('Постсинаптический нейрон', fontsize=16)
+ax.set_ylabel('Пресинатический нейрон', fontsize=16)
+ax.tick_params(axis='x', which='major', labelsize=12)
+ax.tick_params(axis='y', which='major', labelsize=12)
+plt.show()
 
 mon = StateMonitor(G, 'v', record=True)
 spike_monitor = SpikeMonitor(G)
@@ -125,8 +168,10 @@ plt.figure(figsize=(10, 8))
 plt.scatter(spike_times, spike_indices, marker='|')
 plt.xlim(0,10)
 plt.ylim(0,100)
-plt.xlabel('Время (сек)', fontsize=14)
-plt.ylabel('Нейроны', fontsize=14)
+plt.xlabel('Время (сек)', fontsize=16)
+plt.ylabel('Нейроны', fontsize=16)
+ax.tick_params(axis='x', which='major', labelsize=12)
+ax.tick_params(axis='y', which='major', labelsize=12)
 
 # Извлечение данных
 t_sim = mon.t/second
@@ -153,13 +198,13 @@ signal_noisy = np.stack((trial0, trial1), axis=-1)  # (1000, n_neurons//2, 2)
 fig, axes = plt.subplots(2, 1, figsize=(10, 8))
 
 axes[0].plot(t_sim, signal_noisy[:,0,0], label="Сигнал 1")
-axes[0].set_xlabel("Время (сек)", fontsize=14)
-axes[0].set_ylabel("Мембранный потенциал (мВ)", fontsize=14)
+axes[0].set_xlabel("Время (сек)", fontsize=16)
+axes[0].set_ylabel("Мембранный потенциал (мВ)", fontsize=16)
 axes[0].legend()
 
 axes[1].plot(t_sim, signal_noisy[:,0,1], label="Сигнал 2")
-axes[1].set_xlabel("Время (сек)", fontsize=14)
-axes[1].set_ylabel("Мембранный потенциал (мВ)", fontsize=14)
+axes[1].set_xlabel("Время (сек)", fontsize=16)
+axes[1].set_ylabel("Мембранный потенциал (мВ)", fontsize=16)
 axes[1].legend()
 
 v  = np.stack([v1, v2], axis=-1)
@@ -167,18 +212,17 @@ v_noisy = v + np.random.normal(0, 1, v.shape)
 
 print(v_noisy.shape)
 
-
-win_len, step, order = 128, 64, 4
+win_len, step, order = 64, 16, 4
 nfft      = 128
 freqs     = np.linspace(0, fs/2, nfft//2 + 1) # 0-50
-n_freq    = len(freqs) # 129
+n_freq    = len(freqs) # 65
+
 
 def spectra_2x2(A, Sigma, i, j):
     gc  = np.empty(n_freq)
     dtf = np.empty(n_freq)
     pdc = np.empty(n_freq)
-    for l, f in enumerate(freqs): # l=129 f=0-50
-        # print(l)
+    for l, f in enumerate(freqs): # l=65 f=0-50
         z  = np.exp(-1j * 2*np.pi * f / fs)
         Az = np.eye(2, dtype=complex) # [[1+j, 0+j],[0+j, 1+j]]
         for p, Al in enumerate(A, start=1): # p=4 Al=(2,2)
@@ -191,36 +235,16 @@ def spectra_2x2(A, Sigma, i, j):
         gc[l]  = np.log(np.real(Sz[i, i] / S_cond)) # ln(S_11(w)/S_(11|2)(w)) np.real - берем действительную часть числа (без j)
         dtf[l] = np.abs(Hz[i, j])**2 / (np.abs(Hz[i, 0])**2 + np.abs(Hz[i, 1])**2)  # |Hz_ij|^2/(|Hz_i0|^2+|Hz_i1|^2)
         pdc[l] = np.abs(Az[i, j])**2 / (np.abs(Az[0, j])**2 + np.abs(Az[1, j])**2)  # |Az_ij|^2/(|Az_0j|^2+|Az_1j|^2)
-        # gc_l  = np.log(np.real(Sz[i, i] / S_cond)) # ln(S_11(w)/S_(11|2)(w)) np.real - берем действительную часть числа (без j)
-        # dtf_l = np.abs(Hz[i, j])**2 / (np.abs(Hz[i, 0])**2 + np.abs(Hz[i, 1])**2)  # |Hz_ij|^2/(|Hz_i0|^2+|Hz_i1|^2)
-        # pdc_l = np.abs(Az[i, j])**2 / (np.abs(Az[0, j])**2 + np.abs(Az[1, j])**2)  # |Az_ij|^2/(|Az_0j|^2+|Az_1j|^2)
-        # if gc_l < 0.5:
-        #     gc[l] = 0
-        # else:
-        #     print("gc",l)
-        #     print(gc_l)
-        #     gc[l] = gc_l
-        # if dtf_l < 0.7:
-        #     dtf[l] = 0
-        # else:
-        #     print("dtf", dtf_l)
-        #     print(dtf_l)
-        #     dtf[l] = dtf_l
-        # if pdc_l < 0.7:
-        #     pdc[l] = 0
-        # else:
-        #     print("pdc", pdc_l)
-        #     print(pdc_l)
-        #     pdc[l] = pdc_l
+
     return gc, dtf, pdc
 
 def var_ols_const(y, p=4):
     y = np.asarray(y, float)
-    # y = y.reshape(128, 100)
-    T, k = y.shape # (128, 2)
-    Y = y[p:] # (124, 2)
-    lags = [y[p-l-1:T-l-1] for l in range(p)] # (4, 124, 2) -> смещенные сигналы
-    X = np.hstack([np.ones((T-p, 1)), *lags]) # (124, 9) -> N=T-p=124, 1+k*p=1+2*4=9 -> массив единиц
+    # y = y.reshape(64, 100)
+    T, k = y.shape # (64, 2)
+    Y = y[p:] # (60, 2)
+    lags = [y[p-l-1:T-l-1] for l in range(p)] # (4, 60, 2) -> смещенные сигналы
+    X = np.hstack([np.ones((T-p, 1)), *lags]) # (60, 9) -> N=T-p=60, 1+k*p=1+2*4=9 -> массив единиц
 
     # β = (XᵀX)⁻¹XᵀY
     XtX = X.T @ X # (9, 9)
@@ -231,10 +255,13 @@ def var_ols_const(y, p=4):
     B_new = [B[1+i*k : 1+(i+1)*k].T for i in range(p)] # (4, 2, 2)
     A = np.stack(B_new, axis=0) # (4, 2, 2) -> собираем в один тензор
     
-    E = Y - X @ B # (124, 2)
-    dof = (T-p) - (k*p + 1) # 115
+    E = Y - X @ B # (60, 2)
+    dof = (T-p) - (k*p + 1) # 51
     Sigma = (E.T @ E) / dof # (2, 2)
     return A, Sigma # (4, 2, 2) и (2, 2)
+
+
+
 
 def slide_2x2(i, j):
     G, D, P, T = [], [], [], []
@@ -272,7 +299,7 @@ fig, axs = plt.subplots(2, 3, figsize=(14, 6), sharey=True,
 for col, (name, (m12, m21)) in enumerate(measures.items()):
 
     im = axs[0, col].pcolormesh(time_edges, freq_edges, m12, shading='auto', cmap='turbo')
-    axs[0, col].set_title(f'{name}\n1 → 2')
+    axs[0, col].set_title(f'{name}\n1 → 2', size=16)
     axs[1, col].pcolormesh(time_edges, freq_edges, m21, shading='auto', cmap='turbo')
     axs[1, col].set_title(f'2 → 1')
 
@@ -280,14 +307,16 @@ for col, (name, (m12, m21)) in enumerate(measures.items()):
     for ax in (axs[0, col], axs[1, col]):
         ax.set_xlim(time_edges[0], time_edges[-1])
         ax.set_ylim(0, 50)
-        ax.set_xlabel('t, c')
+        ax.set_xlabel('t, cек', fontsize=16)
+        ax.tick_params(axis='x', which='major', labelsize=12)
+        ax.tick_params(axis='y', which='major', labelsize=12)
 
     # общая цветовая шкала для данного показателя
     cbar = fig.colorbar(im, ax=axs[:, col], shrink=0.85, pad=0.01)
-    cbar.set_label('power')
+    cbar.set_label('Мощность', fontsize=16)
 
 # подпись оси частот только слева
 for ax in axs[:, 0]:
-    ax.set_ylabel('f, Гц')
+    ax.set_ylabel('f, Гц', fontsize=16)
 
 plt.show()
