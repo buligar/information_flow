@@ -1,5 +1,5 @@
 ## Схема эксперимента
 
-![Матрица SBM](figures/fig1.png)
-![Спайковая активность](figures/fig2.png)
-![Спектрограмма](figures/fig3.png)
+![Матрица SBM](figures/1.png)
+![Спайковая активность](figures/2.png)
+![Спектрограмма](figures/3.png)
