@@ -16,8 +16,7 @@ segment_switch = 5  # время переключения драйвера (се
 n_neurons = 100
 fs = sampling_frequency
 n_samples = int(fs * t_total_sim)
-A = 200 * pA
-B = 100 * pA
+A = 100 * pA
 R = 80 * Mohm
 f = 10*Hz  
 f2 = 30*Hz     
@@ -30,7 +29,6 @@ I_half1 = int(t < 5000*ms) * amplitude * sin(2*pi*f*t + phi) : amp
 I_half2 = int(t >= 5000*ms) * amplitude2 * sin(2*pi*f2*t + phi) : amp
 amplitude : amp 
 amplitude2 : amp 
-R          : ohm   # сопротивление мембраны
 '''
 v_threshold = -50 * mV
 v_reset = -70 * mV
@@ -42,12 +40,9 @@ G = NeuronGroup(n_neurons,
                 reset="v = v_reset",
                 method='euler')
 G.v = v_rest
-G.R = R
 
-G.amplitude[:n_neurons//2] = A  # нейроны с 0 по 24 получают амплитуду B
-G.amplitude[n_neurons//2:] = B  # нейроны с 0 по 24 получают амплитуду B
-G.amplitude2[:n_neurons//2] = B  # нейроны с 0 по 24 получают амплитуду B
-G.amplitude2[n_neurons//2:] = A  # нейроны с 0 по 24 получают амплитуду B
+G.amplitude = A  # нейроны получают амплитуду A
+G.amplitude2 = A  # нейроны получают амплитуду A
 
 
 # Вероятности связей
@@ -170,7 +165,7 @@ plt.xlabel('Время (сек)', fontsize=16)
 plt.ylabel('Нейроны', fontsize=16)
 plt.tick_params(axis='x', which='major', labelsize=14)
 plt.tick_params(axis='y', which='major', labelsize=14)
-
+plt.show()
 # Извлечение данных
 t_sim = mon.t/second
 x1 = mon.v[:n_neurons//2, :] / mV  # (форма: n_neurons//2, 1000)
@@ -218,15 +213,15 @@ def spectra_2x2(A, Sigma, i, j):
         z  = np.exp(-1j * 2*np.pi * f / fs)
         Az = np.eye(2, dtype=complex) # [[1+j, 0+j],[0+j, 1+j]]
         for p, Al in enumerate(A, start=1): # p=4 Al=(2,2)
-            Az -= Al * z**p
-
-        # print(Az)
-        Hz = np.linalg.inv(Az) # Az=[[a,b][c,d]] A(z)^{-1}=1/(ad-bc)[[d, -b],[-c, a]]
-        Sz = Hz @ Sigma @ Hz.conj().T # S(z)=H(z)ΣH^*(z) Hz=[[3+j, 5],[2-j, j]] Hz^*=[[3-j, 2+j],[5, -j]]
+            Az -= Al * z**p # (2, 2)
+        
+        Hz = np.linalg.inv(Az) # Az=[[a,b][c,d]] A(z)^{-1}=1/(ad-bc)[[d, -b],[-c, a]] # (2, 2)
+        Sz = Hz @ Sigma @ Hz.conj().T # S(z)=H(z)ΣH^*(z) Hz=[[3+j, 5],[2-j, j]] Hz^*=[[3-j, 2+j],[5, -j]] # (2, 2)
         S_cond = Sz[i, i] - Sz[i, j] * (1.0 / Sz[j, j]) * Sz[j,i]  # S_ii|j = S_ii − S_ij*S_jj^{-1}*S_ji
         gc[l]  = np.log(np.real(Sz[i, i] / S_cond)) # ln(S_11(w)/S_(11|2)(w)) np.real - берем действительную часть числа (без j)
         dtf[l] = np.abs(Hz[i, j])**2 / (np.abs(Hz[i, 0])**2 + np.abs(Hz[i, 1])**2)  # |Hz_ij|^2/(|Hz_i0|^2+|Hz_i1|^2)
         pdc[l] = np.abs(Az[i, j])**2 / (np.abs(Az[0, j])**2 + np.abs(Az[1, j])**2)  # |Az_ij|^2/(|Az_0j|^2+|Az_1j|^2)
+        
 
     return gc, dtf, pdc
 
@@ -242,13 +237,14 @@ def var_ols_const(y, p=4):
     XtX = X.T @ X # (9, 9)
     XtY = X.T @ Y # (9, 2)
     alpha = 1e-3  # или подобрать на кросс‐валидации
-    B = np.linalg.solve(XtX + alpha * np.eye(XtX.shape[0]), XtY) # (9, 2) решаем Ax=b, где XtX-A, XtY-b и еще добавляем регуляризацию
+    B = np.linalg.solve(XtX + alpha * np.eye(XtX.shape[0]), XtY) # (9, 2) решаем Ax=b, где XtX-A, XtY-b и еще добавляем регуляризацию alpha * np.eye(XtX.shape[0]) 
     # B = np.linalg.solve(XtX, XtY) # (9, 2) решаем Ax=b, где XtX-A, XtY-b
     B_new = [B[1+i*k : 1+(i+1)*k].T for i in range(p)] # (4, 2, 2)
     A = np.stack(B_new, axis=0) # (4, 2, 2) -> собираем в один тензор
     
     E = Y - X @ B # (46, 2)
     dof = (T-p) - (k*p + 1) # 51
+    print(dof)
     Sigma = (E.T @ E) / dof # (2, 2)
     return A, Sigma # (4, 2, 2) и (2, 2)
 
@@ -288,24 +284,29 @@ measures = {
 fig, axs = plt.subplots(2, 3, figsize=(14, 6), sharey=True,
                         constrained_layout=True)
 
+labels = ['а', 'б', 'в']
+
 for col, (name, (m12, m21)) in enumerate(measures.items()):
-
-    im = axs[0, col].pcolormesh(time_edges, freq_edges, m12, shading='auto', cmap='turbo')
-    axs[0, col].set_title(f'{name}\n1 → 2', size=16)
+    # Верхний ряд: связь 1→2
+    axs[0, col].pcolormesh(time_edges, freq_edges, m12, shading='auto', cmap='turbo')
+    axs[0, col].set_title(f'({labels[col]}) {name}, 1 → 2', fontsize=16)
+    # Нижний ряд: связь 2→1
     axs[1, col].pcolormesh(time_edges, freq_edges, m21, shading='auto', cmap='turbo')
-    axs[1, col].set_title(f'2 → 1')
+    axs[1, col].set_title(f'{name}, 2 → 1', fontsize=16)
 
-    # горизонтальные линии на частотах драйверов
+    # Оформление осей и границ
     for ax in (axs[0, col], axs[1, col]):
         ax.set_xlim(time_edges[0], time_edges[-1])
         ax.set_ylim(0, fs/2)
-        ax.set_xlabel('t, cек', fontsize=16)
-        ax.tick_params(axis='x', which='major', labelsize=12)
-        ax.tick_params(axis='y', which='major', labelsize=12)
+        ax.set_xlabel('t, сек', fontsize=14)
+        ax.tick_params(axis='x', labelsize=12)
+        ax.tick_params(axis='y', labelsize=12)
 
-    # общая цветовая шкала для данного показателя
+# Общая цветовая шкала для каждого показателя
+for col in range(3):
+    im = axs[0, col].collections[0]  # Берём последний картограммный объект
     cbar = fig.colorbar(im, ax=axs[:, col], shrink=0.85, pad=0.01)
-    cbar.set_label('Мощность', fontsize=16)
+    cbar.set_label('Мощность', fontsize=14)
 
 # подпись оси частот только слева
 for ax in axs[:, 0]:
